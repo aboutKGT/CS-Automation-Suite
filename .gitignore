@@ -205,3 +205,18 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+# 가상환경 및 파이썬 캐시
+venv/
+__pycache__/
+*.py[cod]
+
+# 설정 및 보안
+config/settings.yaml
+.env
+
+# 데이터 폴더 내 파일들
+data/*.csv
+data/*.json
+data/*.sqlite
