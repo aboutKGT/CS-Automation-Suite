@@ -32,19 +32,20 @@ CS-Automation-Suite/
 │   ├── storage.py       # 데이터 저장 및 중복 체크 로직
 │   └── notifier.py      # 슬랙 알림 발송 모듈
 └── scheduler.py         # 전체 프로세스 통합 및 주기적 실행 제어
-
----
+```
 
 🚀 How to Run
-환경 변수 설정: 
+1. 환경 변수 설정
 config/settings.yaml 파일에 Gemini API 키와 Slack Webhook URL을 입력합니다.
 
-의존성 설치:
+2. 의존성 설치
+Bash
 pip install -r requirements.txt
 playwright install chromium
+3. 실행
 
----
-
+Bash
+python scheduler.py
 📈 Future Roadmap
 [ ] 멀티 URL(여러 상품 페이지) 동시 모니터링 지원
 
