@@ -34,21 +34,24 @@ CS-Automation-Suite/
 └── scheduler.py         # 전체 프로세스 통합 및 주기적 실행 제어
 ```
 
-🚀 How to Run
-1. 환경 변수 설정
-config/settings.yaml 파일에 Gemini API 키와 Slack Webhook URL을 입력합니다.
+## 🚀 How to Run
 
-2. 의존성 설치
-Bash
+### 1. 환경 변수 설정
+`config/settings.yaml` 파일에 Gemini API 키와 Slack Webhook URL을 입력합니다.
+
+### 2. 의존성 설치
+```bash
 pip install -r requirements.txt
 playwright install chromium
-3. 실행
+```
 
-Bash
+### 3. 실행
+```bash
 python scheduler.py
-📈 Future Roadmap
-[ ] 멀티 URL(여러 상품 페이지) 동시 모니터링 지원
+```
 
-[ ] 분석 데이터 시각화 대시보드 (Streamlit) 구축
+## 📈 Future Roadmap
 
-[ ] 데이터베이스 SQLite/PostgreSQL 전환
+* [ ] 멀티 URL(여러 상품 페이지) 동시 모니터링 지원
+* [ ] 분석 데이터 시각화 대시보드 (Streamlit) 구축
+* [ ] 데이터베이스 SQLite/PostgreSQL 전환
