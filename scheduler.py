@@ -2,103 +2,133 @@ import schedule
 import time
 import asyncio
 import os
-import random
+import yaml
+import sys
 
-# 우리가 만든 모듈들 가져오기
 from src.crawler import GlowmCrawler
 from src.processor import ReviewProcessor
 from src.notifier import SlackNotifier
 from src.storage import ReviewStorage
 
-# --- [설정 구간] ---
-CHECK_INTERVAL_MINUTES = 30 
-TARGET_URL = "https://theglowm.com/product/%EA%B8%80%EB%A1%9C%EC%9A%B0%EC%97%A0-%ED%94%84%EB%A6%AC%EB%AF%B8%EC%97%84-%ED%95%98%EB%93%9C-%EC%BC%80%EC%9D%B4%EC%8A%A4/46/category/42/display/1/"
+# ==========================================
+# 🎛️ [설정] 글로벌 최초 실행 모드
+# ==========================================
+# True: 아예 전체 시스템이 알림을 끄고 1회만 돔
+# False: 기본적으로 알림을 켬 (단, 신규 추가된 상품은 알아서 끔)
+FIRST_RUN_MODE = False
+
+with open("config/settings.yaml", "r", encoding='utf-8') as f:
+    config = yaml.safe_load(f)
+
+CHECK_INTERVAL_MINUTES = 30
+PRODUCTS = config.get('products', [])
 
 def job():
     current_time = time.strftime('%Y-%m-%d %H:%M:%S')
-    print(f"\n⏰ [스케줄러] 리뷰 검토 시작 ({current_time})...")
+    print(f"\n⏰ [스케줄러] 리뷰 수집 시작 ({current_time})")
     
     crawler = GlowmCrawler()
     processor = ReviewProcessor()
     notifier = SlackNotifier()
     storage = ReviewStorage()
-
-    is_first_run = not os.path.exists("data/reviews_db.csv")
-    max_pages = 20 if is_first_run else 100
-
-    print(f"   👉 전략: {'최초 구축 모드' if is_first_run else '모니터링 모드'}")
-
-    try:
-        # 1. 신규 리뷰 수집
-        new_reviews = asyncio.run(
-            crawler.fetch_reviews(TARGET_URL, max_pages=max_pages, storage=storage)
-        )
-    except Exception as e:
-        print(f"❌ 크롤링 중 치명적 오류 발생: {e}")
-        return
-
-    if not new_reviews:
-        print(f"💤 새로 등록된 리뷰가 없습니다.")
-        return
-
-    print(f"🚀 {len(new_reviews)}개의 신규 리뷰 발견! Batch 분석을 준비합니다.")
-
-    # 2. Batch 분석을 위한 데이터 포맷팅
-    # 분석에 필요한 ID와 텍스트 쌍을 만듭니다.
-    batch_input = []
-    raw_text_map = {} # 나중에 원본 텍스트를 다시 찾기 위한 매핑용
     
-    for text in new_reviews:
-        r_id = storage.generate_id(text)
-        batch_input.append({'id': r_id, 'text': text})
-        raw_text_map[r_id] = text
+    # [핵심] 현재 DB에 존재하는 상품 ID 목록 가져오기
+    existing_products = storage.get_existing_product_ids()
+    
+    for product in PRODUCTS:
+        p_id = product['id']
+        p_name = product['name']
+        p_url = product['url']
+        
+        # [판단 로직]
+        # 1. 글로벌 설정이 FIRST_RUN_MODE이면 -> 무조건 알림 OFF
+        # 2. 이 상품 ID가 DB에 없으면(신규 상품) -> 이번만 알림 OFF (초기 구축)
+        is_new_product_entry = p_id not in existing_products
+        
+        should_mute = FIRST_RUN_MODE or is_new_product_entry
+        
+        print(f"\n   📦 상품 점검: {p_name} ({p_id})")
+        if is_new_product_entry:
+            print("      ✨ [New] 신규 등록된 상품입니다! 초기 데이터 구축을 진행합니다 (알림 OFF).")
+        
+        MAX_SAFETY_PAGES = 100 
 
-    # 3. AI Batch 분석 실행 (한 번에 묶어서 전송!)
-    print(f"🧠 Gemini Batch 분석 중... (리뷰 {len(batch_input)}개)")
-    analysis_results = processor.analyze_reviews_batch(batch_input)
+        try:
+            new_reviews_data = asyncio.run(
+                crawler.fetch_reviews(p_url, p_id, max_pages=MAX_SAFETY_PAGES, storage=storage)
+            )
+        except Exception as e:
+            print(f"   ❌ {p_name} 크롤링 실패: {e}")
+            continue
 
-    # 4. 분석 결과 처리 및 알림
-    success_count = 0
-    if analysis_results:
-        for result in analysis_results:
-            r_id = result.get('id')
-            if not r_id or r_id not in raw_text_map:
-                continue
-                
-            # 원본 텍스트와 결과 합치기
-            result['raw_text'] = raw_text_map[r_id]
+        if not new_reviews_data:
+            print(f"   💤 신규 리뷰 없음.")
+            continue
+
+        print(f"   🚀 {len(new_reviews_data)}건 발견! 데이터 저장 및 분석 준비...")
+
+        batch_input = []
+        raw_text_map = {} 
+        
+        for item in new_reviews_data:
+            r_id = item['id']
+            text = item['content']
+            storage.save_raw_review(p_id, r_id, text)
+            batch_input.append({'id': r_id, 'text': text})
+            raw_text_map[r_id] = text
+
+        CHUNK_SIZE = 10
+        total_processed = 0
+        
+        for i in range(0, len(batch_input), CHUNK_SIZE):
+            current_batch = batch_input[i : i + CHUNK_SIZE]
+            print(f"   🧠 Gemini 분석 요청 중 (Batch {i//CHUNK_SIZE + 1}: {len(current_batch)}건)...")
             
-            # DB 저장
-            storage.save_review(result)
-            
-            # 슬랙 전송 (최초 구축 모드가 아닐 때만 발송하거나 필터링 가능)
-            notifier.send_notification(result)
-            success_count += 1
-            
-            # 슬랙 메시지 간격 유지 (슬랙 API 가이드 준수)
-            time.sleep(1) 
-    else:
-        print("⚠️ Batch 분석 결과가 비어 있습니다.")
+            analysis_results = processor.analyze_reviews_batch(current_batch)
 
-    print(f"🏁 작업 완료! 총 {success_count}건의 신규 리뷰를 처리했습니다.")
+            if analysis_results:
+                for result in analysis_results:
+                    r_id = result.get('id')
+                    if not r_id or r_id not in raw_text_map: continue
+                    
+                    result['product_name'] = p_name
+                    result['raw_text'] = raw_text_map[r_id]
+                    
+                    storage.update_analysis_result(r_id, result)
+                    
+                    # [핵심] should_mute가 False일 때만 보냄
+                    if not should_mute:
+                        notifier.send_notification(result)
+                        time.sleep(1)
+                    else:
+                        # 로그만 남기고 알림은 스킵
+                        pass
+                    
+                    total_processed += 1
+            else:
+                print("      ⚠️ 해당 Batch 분석 실패.")
+            time.sleep(2)
 
-# --- [서버 가동 루프] ---
-schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(job)
+        print(f"   ✅ {p_name} 처리 완료: 총 {total_processed}건 {'(알림 생략됨)' if should_mute else ''}")
+        time.sleep(3)
 
-print(f"🚀 [GLOW.M] CS 자동화 서버 가동 시작 (Batch 모드)")
-print(f"   - 주기: {CHECK_INTERVAL_MINUTES}분")
-print(f"   - 타겟: {TARGET_URL}")
+    print(f"\n🏁 전체 사이클 완료!")
 
-# 즉시 실행
-job()
-
-while True:
-    try:
-        schedule.run_pending()
-        time.sleep(1)
-    except KeyboardInterrupt:
-        print("\n👋 서버를 종료합니다.")
-        break
-    except Exception as e:
-        print(f"\n❌ 스케줄러 루프 에러: {e}")
-        time.sleep(60)
+if __name__ == "__main__":
+    print(f"🚀 [GLOW.M] 스마트 리뷰 모니터링 서버 가동")
+    print(f"   - 타겟 상품 수: {len(PRODUCTS)}개")
+    print(f"   - 주기: {CHECK_INTERVAL_MINUTES}분")
+    
+    # 서버 시작 시 1회 즉시 실행
+    job()
+    
+    schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(job)
+    while True:
+        try:
+            schedule.run_pending()
+            time.sleep(1)
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            print(f"❌ 에러: {e}")
+            time.sleep(60)

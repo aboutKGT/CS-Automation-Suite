@@ -1,87 +1,75 @@
 from google import genai
-from google.genai import types
 import yaml
 import json
 import time
 
 class ReviewProcessor:
     def __init__(self):
+        # 설정 파일 로드
         with open("config/settings.yaml", "r", encoding='utf-8') as f:
-            config = yaml.safe_load(f)
+            self.config = yaml.safe_load(f)
         
-        self.api_key = config['gemini']['api_key']
-        self.model_name = config['gemini'].get('model_name', 'gemini-1.5-flash')
-        self.client = genai.Client(api_key=self.api_key)
+        # [수정] 신규 SDK 클라이언트 초기화 방식 (Client 객체 생성)
+        self.client = genai.Client(api_key=self.config['gemini']['api_key'])
+        # settings.yaml에 있는 모델명(예: gemini-1.5-flash)을 가져옴
+        self.model_name = self.config['gemini']['model_name']
 
-    def analyze_reviews_batch(self, review_items):
+    def analyze_reviews_batch(self, reviews):
         """
-        여러 개의 리뷰를 한 번에 분석합니다.
-        review_items: [{'id': '...', 'text': '...'}, ...] 형태의 리스트
+        여러 리뷰(딕셔너리 리스트)를 받아 한 번에 분석합니다.
+        reviews: [{'id': '...', 'text': '...'}, ...]
         """
-        if not review_items:
+        if not reviews:
             return []
 
-        # 프롬프트 구성
-        reviews_formatted = "\n".join([f"- [ID: {item['id']}] {item['text']}" for item in review_items])
-        
+        # 프롬프트 구성 (기존과 동일)
         prompt = f"""
-        당신은 이커머스 CS 분석 전문가입니다. 
-        제공된 고객 리뷰 리스트를 분석하여 다음 규칙에 따라 JSON 리스트 형식으로만 응답하세요.
-        각 결과는 반드시 입력된 ID를 포함해야 합니다.
+        다음은 고객 리뷰 데이터입니다. 각 리뷰를 분석하여 JSON 형식으로 반환하세요.
+        
+        [분석 가이드]
+        1. category: 배송, 제품품질, 가격, 서비스, 기타 중 하나
+        2. sentiment: 긍정, 부정, 중립 중 하나
+        3. urgency: 1(매우 낮음) ~ 5(매우 높음) 정수 (부정적이거나 배송/품질 문제는 높게 책정)
+        4. summary: 핵심 내용을 10자 이내로 요약
 
-        [분류 규칙]
-        1. category: '배송', '제품 질감', '기능성', '디자인', '서비스', '기타' 중 하나.
-        2. sentiment: '긍정', '부정', '중립' 중 하나.
-        3. urgency: 1~5점 (1: 단순칭찬, 5: 즉각대응필요).
-        4. summary: 20자 이내 요약.
+        [입력 데이터]
+        {json.dumps(reviews, ensure_ascii=False)}
 
-        [리뷰 리스트]
-        {reviews_formatted}
-
-        [응답 형식 예시]
+        [출력 형식 예시]
         [
-            {{"id": "...", "category": "...", "sentiment": "...", "urgency": 1, "summary": "..."}},
+            {{"id": "리뷰ID", "category": "배송", "sentiment": "부정", "urgency": 4, "summary": "배송이 너무 늦음"}},
             ...
         ]
+        
+        반드시 JSON 리스트만 출력하세요. 마크다운 태그(```json)는 쓰지 마세요.
         """
 
-        max_retries = 3
+        # 재시도 로직 (Exponential Backoff)
+        max_retries = 5 
+        base_wait_time = 2 
+
         for attempt in range(max_retries):
             try:
+                # [수정] 신규 SDK 호출 방식 (client.models.generate_content)
                 response = self.client.models.generate_content(
                     model=self.model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json"
-                    )
+                    contents=prompt
                 )
                 
-                if response.text:
-                    results = json.loads(response.text)
-                    return results if isinstance(results, list) else [results]
+                # 응답 텍스트 정제
+                text = response.text.strip()
+                if text.startswith("```json"):
+                    text = text[7:]
+                if text.endswith("```"):
+                    text = text[:-3]
                 
+                return json.loads(text)
+
             except Exception as e:
-                if "503" in str(e) or "429" in str(e):
-                    print(f"⚠️ 서버 혼잡 발생 (Batch 시도 {attempt+1}/{max_retries}). 대기 후 재시도...")
-                    time.sleep(5) # Batch는 양이 많으므로 좀 더 길게 쉼
-                else:
-                    print(f"❌ Gemini 분석 중 치명적 오류: {e}")
-                    return []
+                # 실패 시 대기 시간을 2배씩 늘림
+                wait_time = base_wait_time * (2 ** attempt)
+                print(f"      ⚠️ API 오류 발생 ({e})... {wait_time}초 후 재시도 ({attempt + 1}/{max_retries})")
+                time.sleep(wait_time)
         
+        print(f"      ❌ 최종 실패: {len(reviews)}건의 리뷰 분석을 건너뜁니다.")
         return []
-
-    def analyze_review(self, text):
-        """기존 단일 리뷰 분석 (하위 호환용)"""
-        # 간단하게 하려면 1개짜리 리스트를 Batch로 보내서 첫 번째 결과만 리턴해도 됩니다.
-        result = self.analyze_reviews_batch([{'id': 'single', 'text': text}])
-        return result[0] if result else None
-
-if __name__ == "__main__":
-    processor = ReviewProcessor()
-    samples = [
-        {'id': '1', 'text': '보관할때 용이하게 쓰는중이용'},
-        {'id': '2', 'text': '배송이 너무 느려요. 일주일 넘게 걸렸네요.'}
-    ]
-    print("Batch 분석 시작...")
-    results = processor.analyze_reviews_batch(samples)
-    print("분석 결과:", json.dumps(results, indent=2, ensure_ascii=False))
