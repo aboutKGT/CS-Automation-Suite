@@ -1,8 +1,8 @@
 # 🚀 CS-Automation-Suite: Multi-Product Review Monitoring System
 
-**이커머스 플랫폼의 다중 상품 리뷰를 실시간으로 모니터링하고, LLM(Gemini)을 활용해 고객의 감정과 시급성을 분석하여 CS 담당자에게 즉시 알림을 제공하는 지능형 자동화 솔루션입니다.**
+**단순한 크롤링을 넘어, 실제 운영 환경에서의 비용 효율과 알림 피로도 문제를 엔지니어링으로 해결한 리뷰 모니터링 도구입니다.**
 
-단순한 크롤링 도구를 넘어, **운영 비용 절감**과 **데이터 무결성**, 시스템 안정성(Resilience)에 초점을 맞춘 엔터프라이즈급 파이프라인입니다.
+브랜드가 성장함에 따라 수동으로 확인하기 어려워진 고객 리뷰를 Playwright와 Gemini LLM을 결합해 자동화했습니다. 특히, 초기 데이터 구축 시 발생하는 '알림 폭탄' 문제와 AI 추론 비용을 최적화하는 데 초점을 맞췄습니다.
 
 ---
 
@@ -26,6 +26,21 @@
 ### 4. 🧠 비용 효율적 AI 분석 (Cost-Effective Batch Processing)
 * **Batch AI 분석:** 리뷰를 1건씩 처리하지 않고 N개씩 묶어(Batch) API를 호출함으로써, API 호출 횟수를 줄이고 처리 속도를 획기적으로 높였습니다.
 * **CS 등급 분류:** 단순 감정 분석을 넘어, 배송/품질/가격 등 카테고리를 분류하고 **1~5점 척도의 시급성(Urgency)**을 산출하여 대응 우선순위를 제안합니다.
+
+---
+
+## 🛠️ Development Challenges & Solutions
+1. Gemini API 503 장애 및 Rate Limit 대응
+문제: 대량의 리뷰 분석 시 외부 API의 일시적 장애나 속도 제한으로 전체 프로세스가 중단되는 현상 발생.
+해결: 단순 재시도가 아닌 Exponential Backoff(지수 백오프) 로직을 적용하여 시스템의 회복 탄력성(Resilience)을 확보했습니다.
+
+2. 데이터 무결성을 위한 Composite Key 설계
+문제: 같은 내용의 리뷰라도 플랫폼 내부 ID가 바뀌거나 중복 수집될 경우 발생하는 데이터 왜곡 문제.
+해결: 리뷰 본문, 작성자, 날짜를 조합한 MD5 해시값(Composite Key)을 생성하여, 데이터베이스 수준에서 중복을 0%로 차단했습니다.
+
+3. 장기 가동 시 메모리 누수 방지
+문제: Headless 브라우저 특성상 수십 개의 상품을 연속 크롤링할 때 메모리 점유율이 지속적으로 상승함.
+해결: 상품별로 브라우저 컨텍스트의 생명주기를 엄격히 분리(Close/New Context)하여 장시간 구동에도 안정적인 메모리 수치를 유지하도록 설계했습니다.
 
 ---
 
@@ -75,11 +90,11 @@ playwright install chromium
 
 ```
 gemini:
-  api_key: "YOUR_GEMINI_API_KEY"
-  model_name: "gemini-1.5-flash"
+  api_key: "GEMINI_API_KEY"
+  model_name: "gemini-flash-latest"
 
 slack:
-  webhook_url: "YOUR_SLACK_WEBHOOK_URL"
+  webhook_url: "SLACK_WEBHOOK_URL"
 
 # 멀티 상품 리스트 설정
 products:
