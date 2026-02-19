@@ -1,0 +1,12 @@
+# Web Crawling & Automation
+playwright==1.58.0
+
+# AI Engine (Gemini API)
+google-genai==1.62.0
+
+# Scheduling & Utilities
+schedule==1.2.2
+PyYAML==6.0.3
+
+# Notification & API Requests
+requests==2.32.5w
